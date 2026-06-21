@@ -20,8 +20,8 @@ export default {
         'lab-muted': '#94a3b8',
       },
       fontFamily: {
-        'cinzel': ['Cinzel', 'serif'],
-        'mono': ['JetBrains Mono', 'monospace'],
+        'cinzel': ['"Microsoft YaHei"', '"PingFang SC"', '"Noto Sans SC"', 'Cinzel', 'serif'],
+        'mono': ['JetBrains Mono', '"Microsoft YaHei"', '"PingFang SC"', '"Noto Sans SC"', 'monospace'],
       },
       animation: {
         'pulse-glow': 'pulse-glow 2s ease-in-out infinite',

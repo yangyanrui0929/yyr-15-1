@@ -2,7 +2,11 @@ import { useEffect, useRef } from 'react';
 import { useGameStore } from '@/store/useGameStore';
 
 export function useSimulation() {
-  const { simulation, tickSimulation } = useGameStore();
+  const simulation = useGameStore((s) => s.simulation);
+  const tickSimulation = useGameStore((s) => s.tickSimulation);
+  const tickRef = useRef(tickSimulation);
+  tickRef.current = tickSimulation;
+
   const rafRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
 
@@ -20,7 +24,7 @@ export function useSimulation() {
     const loop = (time: number) => {
       const delta = Math.min((time - lastTimeRef.current) / 1000, 0.1);
       lastTimeRef.current = time;
-      tickSimulation(delta);
+      tickRef.current(delta);
       rafRef.current = requestAnimationFrame(loop);
     };
 
@@ -31,5 +35,5 @@ export function useSimulation() {
         cancelAnimationFrame(rafRef.current);
       }
     };
-  }, [simulation.status, tickSimulation]);
+  }, [simulation.status]);
 }

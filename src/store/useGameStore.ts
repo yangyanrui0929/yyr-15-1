@@ -52,9 +52,20 @@ interface GameState {
   addArchiveEntry: (entry: Omit<ArchiveEntry, 'id' | 'completedAt'>) => void;
 }
 
+function findStartComponent(components: GameComponent[]): GameComponent | null {
+  if (components.length === 0) return null;
+  const sorted = [...components].sort((a, b) => {
+    if (a.x !== b.x) return a.x - b.x;
+    return a.y - b.y;
+  });
+  return sorted[0];
+}
+
 function createDefaultScheme(): Scheme {
-  const startDomino = createComponent('domino', 1, 5);
-  const endDomino = createComponent('domino', 14, 5);
+  const dominoes: GameComponent[] = [];
+  for (let i = 1; i <= 14; i++) {
+    dominoes.push(createComponent('domino', i, 5));
+  }
 
   return {
     id: generateId(),
@@ -63,13 +74,13 @@ function createDefaultScheme(): Scheme {
     updatedAt: Date.now(),
     gridWidth: CANVAS_WIDTH,
     gridHeight: CANVAS_HEIGHT,
-    components: [startDomino, endDomino],
+    components: dominoes,
     targets: [
       {
         id: generateId(),
         type: 'trigger_component',
         description: '触发终点骨牌 [14,5]',
-        componentId: endDomino.id,
+        componentId: dominoes[dominoes.length - 1].id,
         completed: false,
       },
     ],
@@ -224,11 +235,24 @@ export const useGameStore = create<GameState>((set, get) => ({
   startSimulation: () => {
     const { scheme } = get();
     physicsEngine.reset(scheme.components, scheme.targets);
+
+    const startComp = findStartComponent(scheme.components);
+    if (startComp) {
+      physicsEngine.triggerComponent(startComp.id);
+    }
+
+    const engineState = physicsEngine.getState();
+
     set({
+      scheme: {
+        ...scheme,
+        components: engineState.components as GameComponent[],
+        targets: engineState.targets,
+      },
       simulation: {
         status: 'running',
         currentTime: 0,
-        events: [],
+        events: engineState.events,
         failureReason: null,
         startTime: Date.now(),
       },

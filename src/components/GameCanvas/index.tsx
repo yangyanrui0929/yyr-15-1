@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { useGameStore } from '@/store/useGameStore';
 import { GRID_SIZE } from '@/utils/constants';
 import { Domino } from '@/components/GameComponents/Domino';
@@ -7,32 +7,42 @@ import { Magnet } from '@/components/GameComponents/Magnet';
 import { Delayer } from '@/components/GameComponents/Delayer';
 import type { GameComponent, ComponentType } from '@/types';
 
+const MOVE_THRESHOLD = 5;
+
 export const GameCanvas: React.FC = () => {
   const {
     scheme,
     selectedComponentId,
     simulation,
-    dragState,
     addComponent,
     moveComponent,
     removeComponent,
     rotateComponent,
     selectComponent,
-    setDragState,
     triggerStartComponent,
   } = useGameStore();
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
-  const [draggingExisting, setDraggingExisting] = useState<{
-    id: string;
-    offsetX: number;
-    offsetY: number;
-  } | null>(null);
+
+  const movingIdRef = useRef<string | null>(null);
+  const startPosRef = useRef<{ x: number; y: number } | null>(null);
+  const didMoveRef = useRef(false);
+  const [, forceRender] = useState(0);
+  const [ghostPos, setGhostPos] = useState<{ x: number; y: number } | null>(null);
 
   const gridWidth = scheme.gridWidth * GRID_SIZE;
   const gridHeight = scheme.gridHeight * GRID_SIZE;
+
+  const getGridPosition = useCallback((clientX: number, clientY: number) => {
+    if (!canvasRef.current) return null;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = Math.floor((clientX - rect.left) / GRID_SIZE);
+    const y = Math.floor((clientY - rect.top) / GRID_SIZE);
+    if (x < 0 || x >= scheme.gridWidth || y < 0 || y >= scheme.gridHeight) return null;
+    return { x, y };
+  }, [scheme.gridWidth, scheme.gridHeight]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -48,6 +58,8 @@ export const GameCanvas: React.FC = () => {
       }
       if (e.key === 'Escape') {
         selectComponent(null);
+        movingIdRef.current = null;
+        setGhostPos(null);
       }
     };
 
@@ -55,20 +67,54 @@ export const GameCanvas: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedComponentId, simulation.status, removeComponent, rotateComponent, selectComponent]);
 
-  const getGridPosition = (e: React.DragEvent | React.MouseEvent) => {
-    if (!canvasRef.current) return null;
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left) / GRID_SIZE);
-    const y = Math.floor((e.clientY - rect.top) / GRID_SIZE);
-    if (x < 0 || x >= scheme.gridWidth || y < 0 || y >= scheme.gridHeight) return null;
-    return { x, y };
-  };
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!movingIdRef.current) return;
+      const pos = getGridPosition(e.clientX, e.clientY);
+
+      if (startPosRef.current && !didMoveRef.current) {
+        const dx = e.clientX - startPosRef.current.x;
+        const dy = e.clientY - startPosRef.current.y;
+        if (Math.abs(dx) > MOVE_THRESHOLD || Math.abs(dy) > MOVE_THRESHOLD) {
+          didMoveRef.current = true;
+        }
+      }
+
+      if (pos) {
+        setGhostPos(pos);
+      }
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      const id = movingIdRef.current;
+      const moved = didMoveRef.current;
+      movingIdRef.current = null;
+      startPosRef.current = null;
+      didMoveRef.current = false;
+
+      if (id && moved) {
+        const pos = getGridPosition(e.clientX, e.clientY);
+        if (pos) {
+          moveComponent(id, pos.x, pos.y);
+        }
+      }
+      setGhostPos(null);
+      forceRender((n) => n + 1);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [getGridPosition, moveComponent]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
     setDragOver(true);
-    const pos = getGridPosition(e);
+    const pos = getGridPosition(e.clientX, e.clientY);
     setHoverPos(pos);
   };
 
@@ -83,29 +129,24 @@ export const GameCanvas: React.FC = () => {
     setHoverPos(null);
 
     const componentType = e.dataTransfer.getData('componentType') as ComponentType;
-    const pos = getGridPosition(e);
+    const pos = getGridPosition(e.clientX, e.clientY);
 
     if (componentType && pos && simulation.status !== 'running') {
       addComponent(componentType, pos.x, pos.y);
-    } else if (draggingExisting && pos) {
-      moveComponent(draggingExisting.id, pos.x, pos.y);
-      setDraggingExisting(null);
     }
-
-    setDragState({
-      isDragging: false,
-      componentType: null,
-      componentId: null,
-    });
   };
 
   const handleCanvasClick = (e: React.MouseEvent) => {
-    if (e.target === canvasRef.current || (e.target as HTMLElement).dataset.grid === 'true') {
+    if (
+      e.target === canvasRef.current ||
+      (e.target as HTMLElement).dataset.grid === 'true'
+    ) {
       selectComponent(null);
     }
   };
 
   const handleComponentClick = (comp: GameComponent) => {
+    if (didMoveRef.current) return;
     if (simulation.status === 'running') {
       if (!comp.isTriggered) {
         triggerStartComponent(comp.id);
@@ -123,22 +164,19 @@ export const GameCanvas: React.FC = () => {
 
   const handleComponentMouseDown = (e: React.MouseEvent, comp: GameComponent) => {
     if (simulation.status === 'running') return;
+    if (e.button !== 0) return;
     e.stopPropagation();
+    e.preventDefault();
 
-    setDraggingExisting({
-      id: comp.id,
-      offsetX: e.clientX,
-      offsetY: e.clientY,
-    });
-    setDragState({
-      isDragging: true,
-      componentType: null,
-      componentId: comp.id,
-      offsetX: 0,
-      offsetY: 0,
-    });
+    movingIdRef.current = comp.id;
+    startPosRef.current = { x: e.clientX, y: e.clientY };
+    didMoveRef.current = false;
+    setGhostPos({ x: comp.x, y: comp.y });
     selectComponent(comp.id);
+    forceRender((n) => n + 1);
   };
+
+  const isBeingMoved = (id: string) => movingIdRef.current === id && didMoveRef.current;
 
   const renderComponent = (comp: GameComponent) => {
     const commonProps = {
@@ -147,6 +185,7 @@ export const GameCanvas: React.FC = () => {
       onClick: () => handleComponentClick(comp),
       onDoubleClick: () => handleComponentDoubleClick(comp),
       onMouseDown: (e: React.MouseEvent) => handleComponentMouseDown(e, comp),
+      style: isBeingMoved(comp.id) ? { opacity: 0.3 } as React.CSSProperties : undefined,
     };
 
     switch (comp.type) {
@@ -167,7 +206,7 @@ export const GameCanvas: React.FC = () => {
     <div className="flex-1 flex items-center justify-center bg-lab-primary/50 p-8 overflow-auto">
       <div
         ref={canvasRef}
-        className={`relative rounded-lg shadow-2xl transition-all ${
+        className={`relative rounded-lg shadow-2xl transition-all select-none ${
           isSimRunning ? 'animate-pulse-glow' : ''
         } ${dragOver ? 'ring-2 ring-lab-accent ring-offset-4 ring-offset-lab-primary' : ''}`}
         style={{
@@ -218,6 +257,19 @@ export const GameCanvas: React.FC = () => {
           />
         )}
 
+        {ghostPos && movingIdRef.current && didMoveRef.current && (
+          <div
+            className="absolute pointer-events-none rounded-md border-2 border-lab-success border-solid bg-lab-success/20 z-30"
+            style={{
+              left: ghostPos.x * GRID_SIZE + 2,
+              top: ghostPos.y * GRID_SIZE + 2,
+              width: GRID_SIZE - 4,
+              height: GRID_SIZE - 4,
+            }}
+            data-grid="true"
+          />
+        )}
+
         {scheme.targets.map((target) => {
           if (target.type !== 'trigger_component' || !target.componentId) return null;
           const comp = scheme.components.find((c) => c.id === target.componentId);
@@ -245,8 +297,8 @@ export const GameCanvas: React.FC = () => {
         {scheme.components.map(renderComponent)}
 
         {isSimRunning && (
-          <div className="absolute top-2 left-2 px-3 py-1 rounded-full bg-lab-success/90 text-lab-primary text-xs font-bold font-mono">
-            ▶ 模拟中 {simulation.currentTime.toFixed(2)}s
+          <div className="absolute top-2 left-2 px-3 py-1 rounded-full bg-lab-success/90 text-lab-primary text-xs font-bold font-mono z-20">
+            {simulation.currentTime.toFixed(2)}s
           </div>
         )}
 
@@ -254,7 +306,8 @@ export const GameCanvas: React.FC = () => {
           <div className="absolute inset-0 flex items-center justify-center bg-lab-primary/80 rounded-lg z-30">
             <div className="text-center">
               <div className="text-6xl mb-4">🎉</div>
-              <div className="font-cinzel text-lab-success text-3xl font-bold mb-2">
+              <div className="font-cinzel text-lab-success text-3xl font-bold mb-2"
+                style={{ fontFamily: "'Microsoft YaHei', 'PingFang SC', 'Cinzel', serif" }}>
                 实验成功！
               </div>
               <div className="text-lab-muted font-mono">
@@ -266,12 +319,15 @@ export const GameCanvas: React.FC = () => {
 
         {simulation.status === 'failed' && (
           <div className="absolute inset-0 flex items-center justify-center bg-lab-primary/80 rounded-lg z-30">
-            <div className="text-center">
+            <div className="text-center px-4">
               <div className="text-6xl mb-4">💥</div>
-              <div className="font-cinzel text-lab-failure text-3xl font-bold mb-2">
+              <div
+                className="font-cinzel text-lab-failure text-3xl font-bold mb-2"
+                style={{ fontFamily: "'Microsoft YaHei', 'PingFang SC', 'Cinzel', serif" }}
+              >
                 实验失败
               </div>
-              <div className="text-lab-muted font-mono text-sm max-w-xs">
+              <div className="text-lab-muted text-sm max-w-xs">
                 {simulation.failureReason}
               </div>
             </div>
